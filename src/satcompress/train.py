@@ -32,9 +32,11 @@ Examples
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 
 from .data import RandomPatchDataset, Sentinel2PatchDataset, build_dataloader
 from .losses import RateDistortionLoss
@@ -132,6 +134,8 @@ def parse_args():
     p.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     p.add_argument("--amp", choices=["off", "bf16", "fp16"], default="bf16")
     p.add_argument("--num-workers", type=int, default=4)
+    p.add_argument("--channels-last", action=argparse.BooleanOptionalAction, default=True,
+                   help="channels_last memory format on CUDA (faster fp16 tensor-core convs)")
     p.add_argument("--out", type=str, default="checkpoints")
     p.add_argument("--no-wandb", action="store_true")
     p.add_argument("--wandb-project", type=str, default="satcompress")
@@ -141,6 +145,8 @@ def parse_args():
 def main():
     args = parse_args()
     device = autodevice(args.device)
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True  # autotune convs for fixed input size
     print(f"[satcompress] device={device} quantizer={args.quantizer} "
           f"radial={args.radial_mode} entropy={args.entropy_model} complex={args.complex}")
 
@@ -161,6 +167,16 @@ def main():
 
     # --- model + quantizer + entropy model ---
     model, quant, rate_model = build_model_and_quant(args, device)
+
+    use_channels_last = args.channels_last and device.type == "cuda" and not args.complex
+    if use_channels_last:
+        model = model.to(memory_format=torch.channels_last)
+
+    n_gpus = torch.cuda.device_count() if device.type == "cuda" else 0
+    if n_gpus > 1 and not args.complex:
+        model = nn.DataParallel(model)  # split each batch across all GPUs
+        print(f"[satcompress] DataParallel across {n_gpus} GPUs")
+
     params = list(model.parameters()) + (list(rate_model.parameters()) if rate_model else [])
     opt = torch.optim.AdamW(params, lr=args.lr)
     criterion = RateDistortionLoss(lambda_rate=args.lambda_rate, phase_weight=args.phase_weight)
@@ -174,9 +190,13 @@ def main():
 
     model.train()
     step = 0
+    t_log = time.time()
+    imgs_since_log = 0
     for epoch in range(args.epochs):
         for batch in loader:
             x = batch.to(device, non_blocking=True)
+            if use_channels_last:
+                x = x.contiguous(memory_format=torch.channels_last)
             opt.zero_grad(set_to_none=True)
 
             with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
@@ -196,20 +216,24 @@ def main():
                 torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
                 opt.step()
 
+            imgs_since_log += x.size(0)
             if step % 20 == 0:
                 with torch.no_grad():
                     p = float(psnr(x, out["x_hat"]))
                     s = float(ssim(x, out["x_hat"]))
                     loss_v = loss.item()
+                dt = time.time() - t_log
+                ips = imgs_since_log / dt if (step > 0 and dt > 0) else 0.0
+                t_log, imgs_since_log = time.time(), 0
                 print(
                     f"epoch {epoch} step {step} loss {loss_v:.4f} "
                     f"psnr {p:.2f} ssim {s:.4f} bpp {float(loss_d['rate_bpp']):.4f} "
-                    f"phase {float(loss_d['phase']):.4f}"
+                    f"phase {float(loss_d['phase']):.4f} ips {ips:.0f}/s"
                 )
                 _log(run, {
                     "loss": loss_v, "mse": float(loss_d["mse"]),
                     "psnr": p, "ssim": s, "rate_bpp": float(loss_d["rate_bpp"]),
-                    "phase": float(loss_d["phase"]), "epoch": epoch,
+                    "phase": float(loss_d["phase"]), "img_per_s": ips, "epoch": epoch,
                 }, step)
             step += 1
 
@@ -217,7 +241,9 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     tag = f"{'complex_' if args.complex else ''}{args.quantizer}"
     ckpt = out_dir / f"satcompress_{tag}.pt"
-    save = {"model": model.state_dict(), "args": vars(args)}
+    # unwrap DataParallel so checkpoints load cleanly on a single device
+    core = model.module if isinstance(model, nn.DataParallel) else model
+    save = {"model": core.state_dict(), "args": vars(args)}
     if rate_model is not None:
         save["rate_model"] = rate_model.state_dict()
     torch.save(save, ckpt)

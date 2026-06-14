@@ -193,6 +193,16 @@ filtered via the SCL band. 256×256 is ~16× the pixels of EuroSAT, so use
 `--batch-size 16` on a 16 GB GPU (more on an H100). `--amp`: `fp16` on T4, `bf16`
 on H100, `off` on older cards (P100).
 
+**Using the GPU(s) fully.** Training auto-saturates the hardware:
+- **Multi-GPU** — when 2+ CUDA devices are visible (e.g. Kaggle "GPU T4 x2"), the
+  model is wrapped in `DataParallel` automatically (prints "DataParallel across N
+  GPUs"); each batch is split across all GPUs.
+- **Throughput** — `cudnn.benchmark` autotunes convs, `channels_last` (default on
+  CUDA) speeds up fp16 tensor-core convs, and the DataLoader uses persistent
+  workers + prefetch so the GPUs aren't starved. Each log line prints `ips` (images/sec).
+- `train_s2.sh` defaults to `BATCH=48` (≈24/GPU on two T4s) with linear LR scaling;
+  override with e.g. `BATCH=24 bash scripts/train_s2.sh` if you hit OOM.
+
 Serve the trained model (Phase 5):
 
 ```bash

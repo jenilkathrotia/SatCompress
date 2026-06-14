@@ -75,3 +75,20 @@ def test_patches_per_scene_multiplier(tmp_path):
                                patches_per_scene=8)
     assert len(ds) == 8  # one file x 8 crops
     assert tuple(ds[0].shape) == (4, 64, 64)
+
+
+def test_build_dataloader_throughput_options():
+    """workers>0 enables persistent workers + prefetch; workers==0 stays simple."""
+    pytest.importorskip("torch")
+    from satcompress.data import RandomPatchDataset, build_dataloader
+
+    ds = RandomPatchDataset(length=8, channels=4, patch_size=32)
+
+    dl0 = build_dataloader(ds, batch_size=2, num_workers=0, pin_memory=False)
+    assert dl0.num_workers == 0
+    assert next(iter(dl0)).shape[0] == 2  # iterates fine with no workers
+
+    dl2 = build_dataloader(ds, batch_size=2, num_workers=2, pin_memory=False, prefetch_factor=4)
+    assert dl2.num_workers == 2
+    assert dl2.persistent_workers is True
+    assert dl2.prefetch_factor == 4

@@ -141,7 +141,13 @@ def build_dataloader(
     shuffle: bool = True,
     num_workers: int = 4,
     pin_memory: bool = True,
+    prefetch_factor: int = 4,
 ) -> DataLoader:
+    # With workers, keep them alive across epochs and prefetch ahead so the GPU
+    # is never starved by 256x256 GeoTIFF decode latency.
+    extra = {}
+    if num_workers > 0:
+        extra = {"persistent_workers": True, "prefetch_factor": prefetch_factor}
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -149,4 +155,5 @@ def build_dataloader(
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=shuffle,
+        **extra,
     )

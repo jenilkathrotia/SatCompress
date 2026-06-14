@@ -9,18 +9,22 @@
 #   4. autoencoder + PolarQuant + log-polar + Rayleigh-von Mises entropy model
 #
 # Tunables (override via env): EPOCHS=50 BATCH=24 bash scripts/train_s2.sh
+set -euo pipefail
 EPOCHS="${EPOCHS:-30}"
-BATCH="${BATCH:-16}"           # 256x256 is heavy; 16 fits a 16 GB T4 (fp16). AWS can go higher.
+BATCH="${BATCH:-48}"           # full T4-x2 use: ~24/GPU at 256x256 fp16. Drop to 24/16 if OOM.
 LATENT="${LATENT:-192}"        # even -> clean PolarQuant pairing
 DATA="${DATA:-data/s2}"
-AMP="${AMP:-fp16}"             # T4: fp16. P100/older: set AMP=off. H100: bf16.
+AMP="${AMP:-fp16}"             # T4: fp16. P100/older: AMP=off. H100: bf16.
+# Linear LR scaling rule: lr grows with batch (base 1e-4 @ batch 16).
+LR="${LR:-$(awk "BEGIN{printf \"%.6f\", 0.0001*$BATCH/16}")}"
 PS=256
 SCALE=10000                    # Sentinel-2 L2A reflectance
 CH=4                           # B04,B03,B02,B08
+# DataParallel auto-engages when 2 GPUs are visible (Kaggle "GPU T4 x2").
 COMMON="--data-root $DATA --patch-size $PS --reflectance-scale $SCALE --channels $CH \
   --patches-per-scene 1 --latent $LATENT --batch-size $BATCH --epochs $EPOCHS \
-  --amp $AMP --num-workers 4"
-set -euo pipefail
+  --lr $LR --amp $AMP --num-workers 4"
+echo "[train_s2] BATCH=$BATCH LR=$LR EPOCHS=$EPOCHS AMP=$AMP"
 
 echo "==> [1/4] Classical baselines (JPEG / JPEG2000, RGB bands)"
 python scripts/run_baselines.py --data-root "$DATA" --patch-size $PS \
