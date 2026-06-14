@@ -29,6 +29,15 @@ def test_scl_bad_fraction():
     assert scl_bad_fraction(np.array([])) == 1.0  # empty -> treat as unusable
 
 
+def test_texture_std_filters_flat_tiles():
+    from download_s2_tiles import texture_std
+
+    flat = np.full((4, 64, 64), 500, dtype=np.uint16)        # uniform = open water
+    textured = (np.random.rand(4, 64, 64) * 3000).astype(np.uint16)  # land detail
+    assert texture_std(flat) < 1.0
+    assert texture_std(textured) > 100.0
+
+
 # --------------------------------------------------------------------------
 # Dataset reads a 4-band GeoTIFF tile correctly
 # --------------------------------------------------------------------------

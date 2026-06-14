@@ -7,10 +7,8 @@ torchvision>=0.18
 
 # Numerics / imaging
 numpy>=1.26
-pillow>=10.2
+pillow>=10.2                # JPEG + JPEG2000 (OpenJPEG) baselines, image I/O
 scikit-image>=0.22          # SSIM, classical metrics
-glymur>=0.13                # JPEG 2000 (OpenJPEG) baseline
-imagecodecs>=2024.1.1       # fast JPEG/JPEG2000 encode-decode for benchmarks
 rasterio>=1.3               # read Sentinel-2 GeoTIFF / JP2 bands (+ remote COGs)
 pystac-client>=0.7          # query Earth Search STAC for raw Sentinel-2 tiles
 

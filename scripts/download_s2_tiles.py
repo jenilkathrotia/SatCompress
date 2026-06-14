@@ -76,6 +76,8 @@ def parse_args():
     ap.add_argument("--patch-size", type=int, default=256)
     ap.add_argument("--max-cloud", type=float, default=10.0, help="scene cloud_cover %% cap")
     ap.add_argument("--max-bad-frac", type=float, default=0.1, help="per-tile SCL bad-pixel cap")
+    ap.add_argument("--min-std", type=float, default=120.0,
+                    help="drop flat/low-texture tiles (open water) below this RGB std; 0 disables")
     ap.add_argument("--max-per-scene", type=int, default=400, help="cap tiles per scene for variety")
     ap.add_argument("--date-range", type=str, default="2024-04-01/2024-09-30")
     ap.add_argument("--scenes-per-aoi", type=int, default=12)
@@ -120,22 +122,43 @@ def _asset_href(item, key):
     return asset.href
 
 
-def extract_tiles_from_scene(item, out_dir, ps, max_bad_frac, max_per_scene, remaining, rng):
-    """Read 256x256 windows from one scene's COGs; write the clean ones. Returns count."""
+def texture_std(stack: np.ndarray) -> float:
+    """Spatial std of the RGB bands — near-zero for flat water/uniform tiles.
+
+    Pure function (no I/O) so it is unit-testable.
+    """
+    rgb = stack[:3] if stack.shape[0] >= 3 else stack
+    return float(rgb.astype(np.float32).std())
+
+
+def extract_tiles_from_scene(item, out_dir, ps, max_bad_frac, max_per_scene,
+                             remaining, rng, min_std=0.0):
+    """Read 256x256 windows from one scene's COGs; write the clean ones. Returns count.
+
+    A failure to resolve assets or open any COG skips the whole scene (returns 0)
+    instead of crashing the run; an error mid-loop ends this scene early but keeps
+    the tiles already written.
+    """
     import rasterio
     from rasterio.windows import Window, transform as window_transform
 
-    band_hrefs = [_asset_href(item, k) for k in BAND_ASSETS]
-    scl_href = _asset_href(item, SCL_ASSET)
+    srcs, scl_src = [], None
+    try:
+        band_hrefs = [_asset_href(item, k) for k in BAND_ASSETS]
+        scl_href = _asset_href(item, SCL_ASSET)
+        srcs = [rasterio.open(h) for h in band_hrefs]
+        scl_src = rasterio.open(scl_href)
+    except Exception as e:
+        print(f"[s2]   skip {item.id}: open failed ({e})")
+        for s in srcs:
+            try:
+                s.close()
+            except Exception:
+                pass
+        return 0
 
     written = 0
     try:
-        srcs = [rasterio.open(h) for h in band_hrefs]
-    except Exception as e:
-        print(f"[s2]   skip {item.id}: open failed ({e})")
-        return 0
-    try:
-        scl_src = rasterio.open(scl_href)
         H, W = srcs[0].height, srcs[0].width
         # SCL is 20 m (half the 10 m grid); scale factor for window coords.
         scl_scale = scl_src.width / W
@@ -153,6 +176,9 @@ def extract_tiles_from_scene(item, out_dir, ps, max_bad_frac, max_per_scene, rem
             # drop near-empty (nodata is 0 in S2 L2A COGs)
             if (stack == 0).mean() > max_bad_frac:
                 continue
+            # drop flat/low-texture tiles (open water, uniform fields)
+            if min_std > 0 and texture_std(stack) < min_std:
+                continue
             # SCL cloud/shadow/nodata filter
             sps = max(1, int(round(ps * scl_scale)))
             scl_win = Window(int(col * scl_scale), int(row * scl_scale), sps, sps)
@@ -166,13 +192,19 @@ def extract_tiles_from_scene(item, out_dir, ps, max_bad_frac, max_per_scene, rem
             out_path = out_dir / f"{item.id}_{row}_{col}.tif"
             _write_tile(rasterio, out_path, stack, srcs[0].crs, transform)
             written += 1
+    except Exception as e:
+        print(f"[s2]   {item.id}: stopped early ({e})")
     finally:
         for s in srcs:
-            s.close()
-        try:
-            scl_src.close()
-        except Exception:
-            pass
+            try:
+                s.close()
+            except Exception:
+                pass
+        if scl_src is not None:
+            try:
+                scl_src.close()
+            except Exception:
+                pass
     return written
 
 
@@ -211,7 +243,7 @@ def main():
             break
         got = extract_tiles_from_scene(
             item, out, args.patch_size, args.max_bad_frac,
-            args.max_per_scene, args.num_tiles - total, rng,
+            args.max_per_scene, args.num_tiles - total, rng, args.min_std,
         )
         total += got
     print(f"[s2] done: wrote {total} tiles to {out}")

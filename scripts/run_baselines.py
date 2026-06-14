@@ -13,8 +13,6 @@ import argparse
 import csv
 from pathlib import Path
 
-import torch
-
 from satcompress.baselines import rate_distortion_sweep
 from satcompress.data import RandomPatchDataset, Sentinel2PatchDataset
 
@@ -38,8 +36,9 @@ def main():
             reflectance_scale=args.reflectance_scale,
         )
 
+    # Use ALL bands so bpp is comparable to the neural model (which compresses all
+    # bands). JPEG handles >3 bands via RGB + grayscale; JPEG2000 is multi-component.
     images = [ds[i] for i in range(min(args.limit, len(ds)))]
-    images = [im[:3] for im in images]  # use first 3 bands as RGB
     records = rate_distortion_sweep(images)
 
     out = Path(args.out)
