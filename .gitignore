@@ -7,11 +7,13 @@ venv/
 .eggs/
 
 # Data & artifacts (large, not version-controlled)
-data/
-!data/.gitkeep
-checkpoints/
-runs/
-wandb/
+# NOTE: leading slash anchors to repo root so this does NOT match the code
+# package src/satcompress/data/.
+/data/
+!/data/.gitkeep
+/checkpoints/
+/runs/
+/wandb/
 *.pt
 *.ckpt
 *.tif
