@@ -17,13 +17,15 @@ DATA="${DATA:-data/s2}"
 AMP="${AMP:-fp16}"             # T4: fp16. P100/older: AMP=off. H100: bf16.
 # Linear LR scaling rule: lr grows with batch (base 1e-4 @ batch 16).
 LR="${LR:-$(awk "BEGIN{printf \"%.6f\", 0.0001*$BATCH/16}")}"
+WANDB="${WANDB:-off}"          # off by default so it never hangs on a login prompt;
+[ "$WANDB" = "off" ] && WB="--no-wandb" || WB=""   # set WANDB=on (after `wandb login`) to log
 PS=256
 SCALE=10000                    # Sentinel-2 L2A reflectance
 CH=4                           # B04,B03,B02,B08
 # DataParallel auto-engages when 2 GPUs are visible (Kaggle "GPU T4 x2").
 COMMON="--data-root $DATA --patch-size $PS --reflectance-scale $SCALE --channels $CH \
   --patches-per-scene 1 --latent $LATENT --batch-size $BATCH --epochs $EPOCHS \
-  --lr $LR --amp $AMP --num-workers 4"
+  --lr $LR --amp $AMP --num-workers 4 $WB"
 echo "[train_s2] BATCH=$BATCH LR=$LR EPOCHS=$EPOCHS AMP=$AMP"
 
 echo "==> [1/4] Classical baselines (JPEG / JPEG2000, RGB bands)"
