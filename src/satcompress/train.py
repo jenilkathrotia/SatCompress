@@ -123,6 +123,8 @@ def parse_args():
     p.add_argument("--latent", type=int, default=192)
     p.add_argument("--channels", type=int, default=3)
     p.add_argument("--patch-size", type=int, default=256)
+    p.add_argument("--patches-per-scene", type=int, default=16,
+                   help="random crops per scene per epoch; use 1 for pre-extracted tiles")
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--epochs", type=int, default=10)
     p.add_argument("--lr", type=float, default=1e-4)
@@ -150,6 +152,7 @@ def main():
         ds = Sentinel2PatchDataset(
             args.data_root, patch_size=args.patch_size,
             reflectance_scale=args.reflectance_scale,
+            patches_per_scene=args.patches_per_scene,
         )
         workers = args.num_workers
     loader = build_dataloader(

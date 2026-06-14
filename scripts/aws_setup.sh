@@ -24,9 +24,9 @@ echo "==> Core Python deps"
 pip install --quiet numpy pillow scikit-image wandb pyyaml tqdm pytest \
     fastapi "uvicorn[standard]" streamlit python-multipart
 
-echo "==> Optional geo/codec deps (best-effort; only needed for multispectral + JPEG2000 baseline)"
-pip install --quiet glymur imagecodecs rasterio || \
-  echo "   (skipped geo libs — fine for the EuroSAT RGB path)"
+echo "==> Geo/codec deps (rasterio + pystac-client needed for raw Sentinel-2 tiles)"
+pip install --quiet glymur imagecodecs rasterio pystac-client || \
+  echo "   (some geo libs failed — fine for the EuroSAT RGB path, but raw S2 needs rasterio+pystac-client)"
 
 echo "==> Install satcompress (package only)"
 pip install --quiet -e . --no-deps

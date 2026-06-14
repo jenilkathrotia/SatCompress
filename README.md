@@ -126,7 +126,8 @@ src/satcompress/
   metrics.py    PSNR, SSIM (differentiable), bpp, entropy estimate
   losses.py     RateDistortionLoss + FourierPhaseLoss
   train.py      training entry point (AMP + W&B, --device override)
-scripts/        download_sentinel.py · run_baselines.py · ablation.py
+scripts/        download_sentinel.py (EuroSAT) · download_s2_tiles.py (raw S2 COGs)
+                run_baselines.py · ablation.py · aws_setup.sh · train_s2.sh
 serving/        api.py (FastAPI) · app.py (Streamlit live demo)
 configs/        default.yaml (+ W&B sweep space)
 tests/          test_polarquant.py + test_extensions.py  (20 tests)
@@ -164,12 +165,33 @@ python -m satcompress.train --complex --quantizer polar --phase-weight 0.1 \
 > On Apple Silicon, pass `--device cpu` for the research configs: MPS currently
 > mishandles `atan2`/`logsumexp` and can produce NaNs (CUDA and CPU are fine).
 
-Train on real Sentinel-2 data:
+Train on real Sentinel-2 data — two options:
 
+**A) EuroSAT** (quick dev set: 64×64 RGB, ~27k tiles):
 ```bash
 python scripts/download_sentinel.py --out data/sentinel     # EuroSAT (S2 RGB)
-python -m satcompress.train --data-root data/sentinel --quantizer polar
+python -m satcompress.train --data-root data/sentinel \
+    --patch-size 64 --reflectance-scale 255 --patches-per-scene 1 --quantizer polar
 ```
+
+**B) Raw Sentinel-2 256×256 tiles** (publication-grade: 4-band RGB+NIR, NDVI-ready):
+```bash
+# Pull tiles from Earth Search (AWS open data COGs — free, no account).
+# Windowed reads mean we fetch only the 256×256 windows, not whole 1 GB scenes.
+python scripts/download_s2_tiles.py --out data/s2 --num-tiles 15000
+
+# Train the full ablation (baselines → scalar → polar → polar+log+Rayleigh-vM):
+bash scripts/train_s2.sh                      # EPOCHS/BATCH/AMP overridable via env
+
+# …or a single run:
+python -m satcompress.train --data-root data/s2 --channels 4 --patch-size 256 \
+    --reflectance-scale 10000 --patches-per-scene 1 --quantizer polar \
+    --latent 192 --batch-size 16 --amp fp16 --epochs 30
+```
+Tiles are `(4,256,256)` uint16 GeoTIFFs, band order `[B04,B03,B02,B08]`, cloud-
+filtered via the SCL band. 256×256 is ~16× the pixels of EuroSAT, so use
+`--batch-size 16` on a 16 GB GPU (more on an H100). `--amp`: `fp16` on T4, `bf16`
+on H100, `off` on older cards (P100).
 
 Serve the trained model (Phase 5):
 
