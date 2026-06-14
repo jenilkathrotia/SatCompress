@@ -21,8 +21,9 @@ venv/
 *.jp2
 *.SAFE/
 
-# Results that ARE worth keeping go in results/ explicitly
+# Results that ARE worth keeping go in results/ explicitly (commit intentionally)
 results/**/*.png
+results/*.csv
 !results/.gitkeep
 
 # OS / editor
