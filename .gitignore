@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.eggs/
+
+# Data & artifacts (large, not version-controlled)
+data/
+!data/.gitkeep
+checkpoints/
+runs/
+wandb/
+*.pt
+*.ckpt
+*.tif
+*.tiff
+*.jp2
+*.SAFE/
+
+# Results that ARE worth keeping go in results/ explicitly
+results/**/*.png
+!results/.gitkeep
+
+# OS / editor
+.DS_Store
+.ipynb_checkpoints/
+.idea/
+.vscode/

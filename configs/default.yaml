@@ -1,0 +1,41 @@
+# Default training configuration for SatCompress.
+# Override any field on the CLI, e.g. `python -m satcompress.train --quantizer scalar`.
+
+data:
+  root: data/sentinel          # directory of Sentinel-2 scenes
+  synthetic: false             # set true to train on synthetic patches
+  patch_size: 256
+  channels: 3                  # 3 = RGB preview; 13 = full S2 multispectral
+  reflectance_scale: 10000     # 10000 for S2 L2A; 255 for 8-bit previews
+
+model:
+  hidden: 128
+  latent: 192                  # latent channels (keep even for PolarQuant pairing)
+  num_down: 4                  # 2^4 = 16x spatial downsampling
+
+quantizer:
+  type: polar                  # none | scalar | polar
+  r_step: 1.0                  # radial grid width
+  n_theta: 16                  # angular bins over [-pi, pi)
+  learnable: false
+
+train:
+  epochs: 100
+  batch_size: 16               # raise to 64-128 on H100 (Phase 4)
+  lr: 1.0e-4
+  lambda_rate: 0.01            # rate-distortion trade-off
+  amp: bf16                    # off | bf16 | fp16  (bf16 for H100 Tensor Cores)
+  num_workers: 8
+
+logging:
+  wandb_project: satcompress
+  out: checkpoints
+
+# Phase 4 — W&B sweep search space (rate vs fidelity)
+sweep:
+  method: bayes
+  metric: { name: val_ssim, goal: maximize }
+  parameters:
+    quantizer.r_step: { min: 0.25, max: 4.0 }
+    quantizer.n_theta: { values: [8, 16, 32, 64] }
+    train.lambda_rate: { min: 0.001, max: 0.1 }
