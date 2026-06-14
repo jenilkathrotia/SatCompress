@@ -21,6 +21,7 @@ def psnr(x: torch.Tensor, y: torch.Tensor, max_val: float = 1.0, eps: float = 1e
     Returns:
         Scalar tensor: mean PSNR (dB) across the batch.
     """
+    x, y = x.float(), y.float()  # compute in fp32 (AMP-safe, and more accurate)
     mse = F.mse_loss(x, y, reduction="none").flatten(1).mean(dim=1)
     return (10.0 * torch.log10((max_val ** 2) / (mse + eps))).mean()
 
@@ -41,10 +42,12 @@ def ssim(
 ) -> torch.Tensor:
     """Structural Similarity Index (Gaussian-windowed), averaged over batch & channels.
 
-    Differentiable, so it can also be used as (1 - SSIM) loss term.
+    Differentiable, so it can also be used as (1 - SSIM) loss term. Computed in
+    fp32 so it is safe under autocast/AMP (avoids fp16/fp32 conv dtype clashes).
     Args:
         x, y: tensors of shape (B, C, H, W) in [0, max_val].
     """
+    x, y = x.float(), y.float()  # AMP-safe: keep window + convs in one dtype
     c, = (x.shape[1],)
     win = _gaussian_window(window_size, sigma, x.device, x.dtype)
     win = win.expand(c, 1, window_size, window_size).contiguous()
