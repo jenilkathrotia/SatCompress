@@ -90,7 +90,7 @@ class ComplexPolarQuant(nn.Module):
     Each complex channel is one (x, y) pair, so `n_pairs == latent channels`.
     """
 
-    def __init__(self, r_step=1.0, n_theta=16, radial_mode="linear", learnable=False, eps=1e-8):
+    def __init__(self, r_step=1.0, n_theta=16, radial_mode="linear", learnable=False, eps=1e-6):
         super().__init__()
         if radial_mode not in ("linear", "log"):
             raise ValueError(f"radial_mode must be 'linear' or 'log', got {radial_mode}")

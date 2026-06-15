@@ -208,11 +208,13 @@ def main():
             if scaler.is_enabled():
                 scaler.scale(loss).backward()
                 scaler.unscale_(opt)
+                _sanitize_grads(params)
                 torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
                 scaler.step(opt)
                 scaler.update()
             else:
                 loss.backward()
+                _sanitize_grads(params)
                 torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
                 opt.step()
 
@@ -250,6 +252,15 @@ def main():
     print(f"[satcompress] saved {ckpt}")
     if run is not None:
         run.finish()
+
+
+def _sanitize_grads(params):
+    """Zero out any non-finite gradient entries so one numerically singular step
+    (e.g. the polar atan2 1/r^2 blow-up near a zero-magnitude latent pair) cannot
+    poison the weights with NaN/inf. Clipping alone can't: clip(NaN) is NaN."""
+    for p in params:
+        if p.grad is not None:
+            torch.nan_to_num_(p.grad, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def _compute_rate(quant, rate_model, z):

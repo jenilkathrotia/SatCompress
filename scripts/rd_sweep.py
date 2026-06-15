@@ -88,6 +88,13 @@ def _quant_of(model):
     return model.module.quantizer if isinstance(model, nn.DataParallel) else model.quantizer
 
 
+def _sanitize_grads(params):
+    """Zero non-finite gradients (polar atan2 1/r^2 singularity) before stepping."""
+    for p in params:
+        if p.grad is not None:
+            torch.nan_to_num_(p.grad, nan=0.0, posinf=0.0, neginf=0.0)
+
+
 def _symbol_bits(quant, z):
     sym = quant.symbols(z)
     if isinstance(sym, tuple):
@@ -141,11 +148,13 @@ def train_and_eval(make_quant, make_rate, lam, train_loader, val_loader, args, d
             if scaler.is_enabled():
                 scaler.scale(loss).backward()
                 scaler.unscale_(opt)
+                _sanitize_grads(params)
                 torch.nn.utils.clip_grad_norm_(params, 1.0)
                 scaler.step(opt)
                 scaler.update()
             else:
                 loss.backward()
+                _sanitize_grads(params)
                 torch.nn.utils.clip_grad_norm_(params, 1.0)
                 opt.step()
     return evaluate(model, val_loader, device)

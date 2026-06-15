@@ -99,7 +99,7 @@ class PolarQuant(nn.Module):
         n_theta: int = 16,
         radial_mode: str = "linear",
         learnable: bool = False,
-        eps: float = 1e-8,
+        eps: float = 1e-6,
     ):
         super().__init__()
         if radial_mode not in ("linear", "log"):
@@ -149,8 +149,11 @@ class PolarQuant(nn.Module):
         """
         C = z.shape[1]
         pairs = C // 2
-        x = z[:, 0 : 2 * pairs : 2].float()
-        y = z[:, 1 : 2 * pairs : 2].float()
+        # fp32 + clamp: clamp guards against an fp16 encoder-output overflow
+        # (>65504 -> inf) propagating into sqrt/atan2 as inf/NaN. 1e4 is far above
+        # any healthy latent (O(1-10)), so it never bites normal training.
+        x = z[:, 0 : 2 * pairs : 2].float().clamp(-1e4, 1e4)
+        y = z[:, 1 : 2 * pairs : 2].float().clamp(-1e4, 1e4)
         r, theta = self._to_polar(x, y)
         return r, theta, self._quantize_radius(r), self._quantize_angle(theta)
 
