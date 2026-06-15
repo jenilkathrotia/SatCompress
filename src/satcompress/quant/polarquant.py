@@ -142,13 +142,15 @@ class PolarQuant(nn.Module):
     def polar_components(self, z: torch.Tensor):
         """Return differentiable (r, theta, r_q, theta_q) for the channel pairs.
 
-        Exposed so the entropy model can score the *quantized* polar symbols
-        without re-implementing the warp. Shapes: (B, pairs, H, W).
+        Computed in fp32 so it is safe under AMP/fp16: the log-polar exp() and the
+        sqrt/atan2 warp overflow or lose precision in fp16 (fp16 max ≈ 65504, and
+        exp(12) already exceeds it), which otherwise produces NaNs. Shapes:
+        (B, pairs, H, W). Exposed so the entropy model scores the quantized symbols.
         """
         C = z.shape[1]
         pairs = C // 2
-        x = z[:, 0 : 2 * pairs : 2]
-        y = z[:, 1 : 2 * pairs : 2]
+        x = z[:, 0 : 2 * pairs : 2].float()
+        y = z[:, 1 : 2 * pairs : 2].float()
         r, theta = self._to_polar(x, y)
         return r, theta, self._quantize_radius(r), self._quantize_angle(theta)
 
@@ -169,12 +171,13 @@ class PolarQuant(nn.Module):
 
         if pairs > 0:
             r, theta, r_q, theta_q = self.polar_components(z)
-            out[:, 0 : 2 * pairs : 2] = r_q * torch.cos(theta_q)
-            out[:, 1 : 2 * pairs : 2] = r_q * torch.sin(theta_q)
+            # math done in fp32 (see polar_components); cast back to z's dtype.
+            out[:, 0 : 2 * pairs : 2] = (r_q * torch.cos(theta_q)).to(z.dtype)
+            out[:, 1 : 2 * pairs : 2] = (r_q * torch.sin(theta_q)).to(z.dtype)
 
         if C % 2 == 1:  # odd leftover channel -> scalar STE round
-            last = z[:, -1:]
-            out[:, -1:] = round_ste(last / self.r_step) * self.r_step
+            last = z[:, -1:].float()
+            out[:, -1:] = (round_ste(last / self.r_step) * self.r_step).to(z.dtype)
 
         return out
 
