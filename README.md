@@ -128,6 +128,7 @@ src/satcompress/
   train.py      training entry point (AMP + W&B, --device override)
 scripts/        download_sentinel.py (EuroSAT) · download_s2_tiles.py (raw S2 COGs)
                 run_baselines.py · ablation.py · aws_setup.sh · train_s2.sh
+                rd_sweep.py (rate-distortion sweep) · plot_rd.py (RD curves)
 serving/        api.py (FastAPI) · app.py (Streamlit live demo)
 configs/        default.yaml (+ W&B sweep space)
 tests/          test_polarquant.py + test_extensions.py  (20 tests)
@@ -202,6 +203,26 @@ on H100, `off` on older cards (P100).
   workers + prefetch so the GPUs aren't starved. Each log line prints `ips` (images/sec).
 - `train_s2.sh` defaults to `BATCH=48` (≈24/GPU on two T4s) with linear LR scaling;
   override with e.g. `BATCH=24 bash scripts/train_s2.sh` if you hit OOM.
+- PolarQuant dials are env knobs: `R_STEP` (radial step) and `N_THETA` (angular
+  bins). Defaults `R_STEP=0.5 N_THETA=32`; finer = higher quality at higher bpp.
+
+### Fair comparison — the rate-distortion curve
+
+Comparing methods at a single setting is misleading (a smaller file *should* look
+worse). The honest comparison is a **rate-distortion curve**: each method run at
+several operating points, plotting bpp vs quality.
+
+```bash
+# Train every method at 4 operating points + classical baselines, on a held-out
+# split, with one consistent bpp metric (empirical entropy of the symbols):
+python scripts/rd_sweep.py --data-root data/s2 --channels 4 --patch-size 256 \
+    --reflectance-scale 10000 --epochs 10 --batch-size 48 --amp fp16   # -> results/rd_results.csv
+
+# Plot bpp vs PSNR and bpp vs SSIM (PolarQuant vs scalar vs JPEG vs JPEG2000):
+python scripts/plot_rd.py    # -> results/rd_psnr.png, results/rd_ssim.png
+```
+The better method's curve sits **higher** (more quality per bit) or **further
+left** (fewer bits for the same quality).
 
 Serve the trained model (Phase 5):
 
