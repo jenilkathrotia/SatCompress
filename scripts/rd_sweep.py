@@ -16,15 +16,23 @@ held-out tiles.
 
 Output: results/rd_results.csv with columns method,setting,bpp,psnr,ssim.
 
+Training budget matters: a neural codec needs *many* gradient steps to become
+competitive (a 10-epoch / ~560-step model sits at ~15 dB PSNR — basically
+untrained, so the classical codecs trivially win). This sweep therefore trains
+FEWER rate points (3 per method) for MANY more epochs, so each model reaches a
+fair operating point in the same wall-clock. Tune the budget with --epochs and
+cap it with --max-steps.
+
 Usage:
     python scripts/rd_sweep.py --data-root data/s2 --channels 4 --patch-size 256 \
-        --reflectance-scale 10000 --epochs 10 --batch-size 48 --amp fp16
+        --reflectance-scale 10000 --epochs 120 --batch-size 48 --amp fp16
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import time
 from pathlib import Path
 
 import torch
@@ -53,7 +61,12 @@ def parse_args():
     p.add_argument("--channels", type=int, default=4)
     p.add_argument("--patch-size", type=int, default=256)
     p.add_argument("--latent", type=int, default=192)
-    p.add_argument("--epochs", type=int, default=10)
+    p.add_argument("--epochs", type=int, default=80,
+                   help="epochs PER config. Neural codecs need many steps to be "
+                        "competitive; 10 is far too few (~15 dB). 80-150 is sane.")
+    p.add_argument("--max-steps", type=int, default=0,
+                   help="hard cap on optimizer steps per config (0=off). Bounds "
+                        "total runtime regardless of --epochs and dataset size.")
     p.add_argument("--batch-size", type=int, default=48)
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--amp", choices=["off", "bf16", "fp16"], default="fp16")
@@ -65,19 +78,25 @@ def parse_args():
     return p.parse_args()
 
 
+# 3 rate points per method (was 4). Fewer configs => each one can train MANY more
+# epochs in the same wall-clock, which is what actually makes the neural curves
+# competitive. The rate knob is quantization coarseness (smaller step = more bits).
+RATE_STEPS = (0.5, 1.0, 2.0)
+
+
 def sweep_configs(latent):
     """(method, setting_label, build_quantizer, build_rate_model_or_None, lambda)."""
     pairs = latent // 2
     cfgs = []
     # scalar control: rate knob = step
-    for s in (0.5, 1.0, 2.0, 4.0):
+    for s in RATE_STEPS:
         cfgs.append(("scalar", f"step={s}", (lambda s=s: UniformScalarQuant(step=s)), None, 0.0))
     # PolarQuant (linear): rate knob = r_step (n_theta fixed fine at 32)
-    for rs in (0.5, 1.0, 2.0, 4.0):
+    for rs in RATE_STEPS:
         cfgs.append(("polar", f"r={rs},nθ=32",
                      (lambda rs=rs: PolarQuant(r_step=rs, n_theta=32)), None, 0.0))
     # PolarQuant + log-polar + matched Rayleigh-vM entropy model
-    for rs in (0.5, 1.0, 2.0, 4.0):
+    for rs in RATE_STEPS:
         cfgs.append(("polar-log-rvm", f"r={rs},nθ=32",
                      (lambda rs=rs: PolarQuant(r_step=rs, n_theta=32, radial_mode="log")),
                      (lambda: PolarRateModel(n_pairs=pairs, n_theta=32)), 0.01))
@@ -136,7 +155,11 @@ def train_and_eval(make_quant, make_rate, lam, train_loader, val_loader, args, d
     scaler = torch.amp.GradScaler("cuda", enabled=(args.amp == "fp16" and use_amp))
 
     model.train()
+    max_steps = args.max_steps if args.max_steps > 0 else float("inf")
+    step, t0 = 0, time.time()
     for _ in range(args.epochs):
+        if step >= max_steps:
+            break
         for x in train_loader:
             x = x.to(device, non_blocking=True)
             opt.zero_grad(set_to_none=True)
@@ -157,6 +180,12 @@ def train_and_eval(make_quant, make_rate, lam, train_loader, val_loader, args, d
                 _sanitize_grads(params)
                 torch.nn.utils.clip_grad_norm_(params, 1.0)
                 opt.step()
+            step += 1
+            if step % 200 == 0:
+                sps = step / (time.time() - t0)
+                print(f"      step {step:>6}  loss {float(loss):.4f}  ({sps:.1f} steps/s)", flush=True)
+            if step >= max_steps:
+                break
     return evaluate(model, val_loader, device)
 
 
@@ -187,9 +216,12 @@ def main():
     print(f"[rd-sweep] train={len(train_idx)} val={len(val_idx)} tiles")
 
     rows = []
-    for method, setting, mq, mr, lam in sweep_configs(args.latent):
+    cfgs = sweep_configs(args.latent)
+    for i, (method, setting, mq, mr, lam) in enumerate(cfgs, 1):
+        print(f"[rd-sweep] ({i}/{len(cfgs)}) training {method} [{setting}] "
+              f"for {args.epochs} epochs ...", flush=True)
         bpp, p, s = train_and_eval(mq, mr, lam, train_loader, val_loader, args, device)
-        print(f"[rd-sweep] {method:<14} {setting:<12} bpp={bpp:.3f} psnr={p:.2f} ssim={s:.4f}")
+        print(f"[rd-sweep] {method:<14} {setting:<12} bpp={bpp:.3f} psnr={p:.2f} ssim={s:.4f}", flush=True)
         rows.append({"method": method, "setting": setting, "bpp": bpp, "psnr": p, "ssim": s})
 
     # classical baselines on the same held-out tiles
