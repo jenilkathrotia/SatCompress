@@ -198,11 +198,16 @@ def main():
 
     if args.synthetic or not args.data_root:
         ds = RandomPatchDataset(length=400, channels=args.channels, patch_size=args.patch_size)
+        workers = 0
     else:
+        # cache=True: every tile is read from disk once (during config 1, epoch 1)
+        # then served from RAM for all 9 configs x N epochs -> GPU-bound, not
+        # disk-bound. num_workers=0 so one process owns the single shared cache.
         ds = Sentinel2PatchDataset(
             args.data_root, patch_size=args.patch_size,
-            reflectance_scale=args.reflectance_scale, patches_per_scene=1,
+            reflectance_scale=args.reflectance_scale, patches_per_scene=1, cache=True,
         )
+        workers = 0
     n = len(ds)
     val_n = max(20, int(n * args.val_frac))
     g = torch.Generator().manual_seed(0)
@@ -210,10 +215,11 @@ def main():
     val_idx, train_idx = perm[:val_n], perm[val_n:]
     pin = device.type == "cuda"
     train_loader = DataLoader(Subset(ds, train_idx), batch_size=args.batch_size, shuffle=True,
-                              num_workers=args.num_workers, pin_memory=pin, drop_last=True)
+                              num_workers=workers, pin_memory=pin, drop_last=True)
     val_loader = DataLoader(Subset(ds, val_idx), batch_size=args.batch_size, shuffle=False,
-                            num_workers=args.num_workers, pin_memory=pin)
-    print(f"[rd-sweep] train={len(train_idx)} val={len(val_idx)} tiles")
+                            num_workers=workers, pin_memory=pin)
+    print(f"[rd-sweep] train={len(train_idx)} val={len(val_idx)} tiles "
+          f"(reflectance_scale={args.reflectance_scale:g}, cache={workers == 0})")
 
     rows = []
     cfgs = sweep_configs(args.latent)

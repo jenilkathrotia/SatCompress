@@ -52,6 +52,10 @@ class Sentinel2PatchDataset(Dataset):
                            (10000 for S2 L2A reflectance; 255 for 8-bit PNG).
         patches_per_scene: virtual length multiplier — how many random crops to
                            expose per scene per epoch.
+        cache: keep each decoded scene in RAM after first read. For many epochs
+               over pre-extracted tiles this removes the GeoTIFF-decode bottleneck
+               that otherwise starves the GPU. Use with num_workers=0 so a single
+               process owns one shared cache (workers would each cache a copy).
     """
 
     def __init__(
@@ -62,6 +66,7 @@ class Sentinel2PatchDataset(Dataset):
         reflectance_scale: float = 10000.0,
         patches_per_scene: int = 16,
         seed: int = 0,
+        cache: bool = False,
     ):
         self.root = Path(root)
         self.patch_size = patch_size
@@ -77,13 +82,25 @@ class Sentinel2PatchDataset(Dataset):
                 "Run scripts/download_sentinel.py or use RandomPatchDataset."
             )
         self._rng = random.Random(seed)
+        self._cache: list[np.ndarray | None] | None = (
+            [None] * len(self.files) if cache else None
+        )
 
     def __len__(self) -> int:
         return len(self.files) * self.patches_per_scene
 
+    def _scene(self, file_idx: int) -> np.ndarray:
+        """Decoded (C, H, W) array for a file, served from RAM cache if enabled."""
+        if self._cache is None:
+            return _read_image(self.files[file_idx], self.bands)
+        arr = self._cache[file_idx]
+        if arr is None:
+            arr = _read_image(self.files[file_idx], self.bands)
+            self._cache[file_idx] = arr
+        return arr
+
     def __getitem__(self, idx: int) -> torch.Tensor:
-        path = self.files[idx % len(self.files)]
-        arr = _read_image(path, self.bands)  # (C, H, W)
+        arr = self._scene(idx % len(self.files))  # (C, H, W)
         _, h, w = arr.shape
         ps = self.patch_size
         if h < ps or w < ps:
